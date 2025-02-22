@@ -1,0 +1,282 @@
+---
+- name: Automate Ubuntu Server Configuration
+  hosts: myhosts
+  become: yes
+  vars_files:
+    - vars.yaml
+
+  tasks:
+    # - name: Initialize MySQL root password
+    #   mysql_user:
+    #     name: root
+    #     password: "{{ mysql_root_password }}"
+    #     check_implicit_admin: yes
+    #     login_unix_socket: /var/run/mysqld/mysqld.sock
+
+    - name: Create secure MySQL config for backups
+      copy:
+        dest: /etc/mysql/backup.cnf
+        content: |
+          [client]
+          user=root
+          password={{ mysql_root_password }}
+          host=localhost
+          protocol=TCP
+        mode: 0600
+
+    # User Management
+    - name: Create sudo user luffy
+      user:
+        name: luffy
+        groups: sudo
+        shell: /bin/bash
+        home: /home/luffy
+
+    - name: Add SSH key for luffy
+      ansible.posix.authorized_key:
+        user: luffy
+        key: "{{ luffy_ssh_key }}"
+
+    - name: Create regular user zoro
+      user:
+        name: zoro
+        shell: /bin/bash
+        home: /home/zoro
+        password: "{{ zoro_password }}"
+
+    # Firewall Configuration
+    - name: Configure UFW Firewall
+      ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto | default('tcp') }}"
+      loop:
+        - { port: 2222 }
+        - { port: 80 }
+        - { port: 443 }
+        - { port: 21 }
+        - { port: '40000:40100', proto: tcp }
+
+    # FTP Server Setup
+    - name: Install vsftpd
+      apt:
+        name: vsftpd
+        state: present
+
+    - name: Configure vsftpd
+      template:
+        src: templates/vsftpd.conf.j2
+        dest: /etc/vsftpd.conf
+      notify: Restart vsftpd
+
+    - name: Create FTP user nami
+      user:
+        name: nami
+        password: "{{ nami_ftp_password }}"
+        shell: /bin/ftponly
+        home: /backup
+        create_home: no
+
+    - name: Set correct permissions for FTP directory
+      file:
+        path: /backup
+        state: directory
+        owner: nami
+        group: nami
+        mode: '0755'
+
+    - name: Create /bin/ftponly for FTP-only access
+      copy:
+        content: "#!/bin/sh\necho 'THis account is limited to FTP access only.'"
+        dest: /bin/ftponly
+        mode: 'a+x'
+
+    - name: Add /bin/ftponly to valid shells
+      lineinfile:
+        path: /etc/shells
+        line: /bin/ftponly
+
+    # Install MySQL Server
+    - name: Install MySQL Server and related packages
+      apt:
+        name: 
+          - mysql-server
+          - python3-pymysql
+        state: present
+        update_cache: yes
+      notify: Restart MySQL
+
+    - name: Create .my.cnf for root user
+      copy:
+        dest: /root/.my.cnf
+        content: |
+          [client]
+          user=root
+          password={{ mysql_root_password }}
+        mode: 0600
+
+    - name: Ensure root uses mysql_native_password
+      mysql_user:
+        name: root
+        plugin_auth_string: mysql_native_password
+        password: "{{ mysql_root_password }}"
+        check_implicit_admin: yes
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+
+    - name: Secure MySQL root user
+      mysql_user:
+        name: root
+        password: "{{ mysql_root_password }}"
+        plugin_auth_string: caching_sha2_password
+        check_implicit_admin: yes
+        # login_user: root
+        # login_password: "{{ mysql_root_password }}"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+
+    - name: Remove all anonymous users accounts
+      mysql_user:
+        name: ''
+        host_all: yes
+        state: absent
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+
+    - name: Remove test database and access to it
+      mysql_db:
+        name: test
+        state: absent
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+
+    - name: Create MySQL database for WordPress
+      mysql_db:
+        name: "{{ wordpress_db_name }}"
+        state: present
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+
+    - name: Create MySQL user for WordPress
+      mysql_user:
+        name: "{{ wordpress_db_user }}"
+        password: "{{ wordpress_db_password }}"
+        priv: "{{wordpress_db_name}}.*:ALL"
+        host: localhost
+        plugin_auth_string: caching_sha2_password
+        state: present
+        # login_user: root
+        # login_password: "{{ mysql_root_password }}"
+
+    # WordPress Setup
+    - name: Install LAMP stack
+      apt:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - php
+        - php-mysql
+        - php-curl
+        - php-gd
+        - php-mbstring
+        - php-xml
+        - php-xmlrpc
+        - php-soap
+        - php-intl
+        - php-zip
+        - apache2
+        - libapache2-mod-php
+
+    - name: Download WordPress
+      get_url:
+        url: https://wordpress.org/latest.tar.gz
+        dest: /tmp/wordpress.tar.gz
+    
+    - name: Extract WordPress
+      unarchive:
+        src: /tmp/wordpress.tar.gz
+        dest: /var/www/html/
+        remote_src: yes
+
+    - name: Configure WordPress
+      template:
+        src: templates/wp-config.php.j2
+        dest: /var/www/html/wordpress/wp-config.php
+      notify: Restart Apache
+
+    - name: Set permissions for WordPress
+      file:
+        path: /var/www/html/wordpress
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+        recurse: yes
+    
+    - name: Configure Apache for WordPress
+      copy:
+        dest: /etc/apache2/sites-available/wordpress.conf
+        content: |
+          <VirtualHost *:80>
+              DocumentRoot /var/www/html/wordpress
+              <Directory /var/www/html/wordpress>
+                  Options FollowSymLinks
+                  AllowOverride All
+                  DirectoryIndex index.php
+                  Require all granted
+              </Directory>
+              <Directory /var/www/html/wordpress/wp-content>
+                  Options FollowSymLinks
+                  Require all granted
+              </Directory>
+              ErrorLog ${APACHE_LOG_DIR}/error.log
+              CustomLog ${APACHE_LOG_DIR}/access.log combined
+          </VirtualHost>
+      notify: Restart Apache
+        
+    - name: Ensure log file exists, create if it does not
+      file:
+        path: /var/log/backup.log
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create backup script
+      template:
+        src: templates/backup_wordpress.sh.j2
+        dest: /usr/local/bin/backup_wordpress.sh
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Add cron job to run daily at midnight
+      cron:
+        name: "Wordpress Database Backup"
+        # hour: 0
+        minute: "*"
+        job: "/usr/local/bin/backup_wordpress.sh"
+        
+    - name: Enable WordPress site
+      command: a2ensite wordpress.conf
+
+    - name: Enable Apache rewrite module
+      command: a2enmod rewrite
+
+    - name: Disable default Apache site
+      command: a2dissite 000-default.conf
+      notify: Restart Apache
+
+  handlers:
+    - name: Restart vsftpd
+      service:
+        name: vsftpd
+        state: restarted
+
+    - name: Restart MySQL
+      service:
+        name: mysql
+        state: restarted
+
+    - name: Restart Apache
+      service:
+        name: apache2
+        state: restarted

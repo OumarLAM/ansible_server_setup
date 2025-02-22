@@ -1,0 +1,36 @@
+#!/bin/bash
+
+# Database credentials
+DB_USER="root"
+DB_PASSWORD="{{ mysql_root_password }}"
+DB_NAME="{{ wordpress_db_name }}"
+
+# Backup directory and file
+BACKUP_DIR="/backup"
+DATE=$(date +%F)
+BACKUP_FILE="$BACKUP_DIR/wordpress_backup_$DATE.sql"
+COMPRESSED_FILE="$BACKUP_FILE.tar.gz"
+LOG_FILE="/var/log/backup.log"
+
+# Create database backup with proper authentication
+mysqldump --defaults-file=/etc/mysql/backup.cnf \
+          {{ wordpress_db_name }} > $BACKUP_FILE 2>>$LOG_FILE
+
+if [ $? -eq 0 ]; then
+    # Compress the backup file
+    tar -czf $COMPRESSED_FILE -C $BACKUP_DIR $(basename $BACKUP_FILE)
+    
+    # Remove the raw SQL backup after compression
+    rm $BACKUP_FILE
+
+    # Set proper ownership for FTP access
+    chown nami:nami $COMPRESSED_FILE
+    chmod 644 $COMPRESSED_FILE
+
+    # Log success
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Backup successful: $COMPRESSED_FILE" >> $LOG_FILE
+else
+    # Log failure
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Backup failed" >> $LOG_FILE
+    exit 1
+fi
