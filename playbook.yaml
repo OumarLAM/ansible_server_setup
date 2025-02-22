@@ -6,24 +6,6 @@
     - vars.yaml
 
   tasks:
-    # - name: Initialize MySQL root password
-    #   mysql_user:
-    #     name: root
-    #     password: "{{ mysql_root_password }}"
-    #     check_implicit_admin: yes
-    #     login_unix_socket: /var/run/mysqld/mysqld.sock
-
-    - name: Create secure MySQL config for backups
-      copy:
-        dest: /etc/mysql/backup.cnf
-        content: |
-          [client]
-          user=root
-          password={{ mysql_root_password }}
-          host=localhost
-          protocol=TCP
-        mode: 0600
-
     # User Management
     - name: Create sudo user luffy
       user:
@@ -129,8 +111,6 @@
         password: "{{ mysql_root_password }}"
         plugin_auth_string: caching_sha2_password
         check_implicit_admin: yes
-        # login_user: root
-        # login_password: "{{ mysql_root_password }}"
         login_unix_socket: /var/run/mysqld/mysqld.sock
 
     - name: Remove all anonymous users accounts
@@ -163,8 +143,6 @@
         host: localhost
         plugin_auth_string: caching_sha2_password
         state: present
-        # login_user: root
-        # login_password: "{{ mysql_root_password }}"
 
     # WordPress Setup
     - name: Install LAMP stack
@@ -251,8 +229,8 @@
     - name: Add cron job to run daily at midnight
       cron:
         name: "Wordpress Database Backup"
-        # hour: 0
-        minute: "*"
+        hour: 0
+        minute: 0
         job: "/usr/local/bin/backup_wordpress.sh"
         
     - name: Enable WordPress site

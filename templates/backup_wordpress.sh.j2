@@ -14,7 +14,7 @@ LOG_FILE="/var/log/backup.log"
 
 # Create database backup with proper authentication
 mysqldump --defaults-file=/etc/mysql/backup.cnf \
-          {{ wordpress_db_name }} > $BACKUP_FILE 2>>$LOG_FILE
+          $DB_NAME > $BACKUP_FILE 2>>$LOG_FILE
 
 if [ $? -eq 0 ]; then
     # Compress the backup file
